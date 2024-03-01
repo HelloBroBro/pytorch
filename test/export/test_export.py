@@ -4,6 +4,7 @@ import copy
 import dataclasses
 import io
 import unittest
+import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
 from re import escape
@@ -2065,7 +2066,7 @@ def forward(self, arg_0):
         self.assertTrue(torch.allclose(Foo()(inp), reexported.module()(inp)))
 
         dim0_x = torch.export.Dim("dim0_x")
-        exported = torch.export.export(Foo(), (inp,), dynamic_shapes={"x": {0: dim0_x}})
+        exported = torch.export.export(Foo(), (inp,), dynamic_shapes=({0: dim0_x},))
         reexported = torch.export.export(exported.module(), (inp,))
         with self.assertRaisesRegex(
             RuntimeError, "shape\[0\] to be equal to 5, but got 7"
@@ -2201,7 +2202,7 @@ def forward(self, arg_0):
         self.assertTrue(len(stateful_module.meta["input_shape_constraints"]), 1)
 
         re_exported = export(
-            stateful_module, (inp,), constraints=[dynamic_dim(inp, 0) > 5]
+            stateful_module, (inp,), dynamic_shapes=({0: dim0_x},)
         )
         self.assertTrue(
             len(re_exported.graph_module.meta["input_shape_constraints"]) == 1
@@ -2607,7 +2608,10 @@ def forward(self, arg_0):
 
         inp = torch.randn(4, 4)
         gm = _export(
-            Foo(), (inp,), constraints=[dynamic_dim(inp, 0) >= 3], pre_dispatch=True
+            Foo(),
+            (inp,),
+            dynamic_shapes=({0: torch.export.Dim("dim", min=3)},),
+            pre_dispatch=True
         ).module()
 
         with self.assertRaisesRegex(RuntimeError, escape("Expected input at *args[0].shape[0]")):
@@ -3404,6 +3408,37 @@ def forward(self, arg0_1, arg1_1, arg2_1):
             # under a new FakeTensorMode.
             ep = torch.export.export(m, (inp,))
 
+    def test_compiling_state(self):
+        class TestModule1(torch.nn.Module):
+            def forward(self, x):
+                if torch._dynamo.is_compiling():
+                    return x * 2
+                else:
+                    return x * 3
+
+        class TestModule2(torch.nn.Module):
+            def forward(self, x):
+                if torch._utils.is_compiling():
+                    return x * 2
+                else:
+                    return x * 3
+
+        class TestModule3(torch.nn.Module):
+            def forward(self, x):
+                if torch.compiler.is_compiling():
+                    return x * 2
+                else:
+                    return x * 3
+
+        for m in [TestModule1(), TestModule2(), TestModule3()]:
+            input = torch.randn(5)
+            ep_strict = export(m, (input,), strict=True)
+            ep_non_strict = export(m, (input,), strict=False)
+
+            self.assertTrue(torch.allclose(input * 3, m(input)))
+            self.assertTrue(torch.allclose(input * 2, ep_strict(input)))
+            self.assertTrue(torch.allclose(input * 2, ep_non_strict(input)))
+
     def test_user_input_and_buffer_mutation(self):
         class MyModule(torch.nn.Module):
             def __init__(self):
@@ -3575,6 +3610,45 @@ def forward(self, arg0_1, arg1_1, arg2_1):
         res = gm(torch.tensor(4), None)
         self.assertEqual(res[0], torch.tensor(16))
         self.assertEqual(res[1], None)
+
+    def test_print(self):
+        class M(torch.nn.Module):
+            def forward(self, x):
+                print("start")
+                x1 = x + x
+                print(x1)
+                x2 = x1 * x1
+                print(1, 2, 3)
+                x3 = x2 + x2
+                return (x1, x3)
+
+        gm = export(M(), (torch.randn(3, 3),)).graph_module
+        self.assertExpectedInline(
+            gm.code.strip(),
+            """\
+def forward(self, arg0_1):
+    add = torch.ops.aten.add.Tensor(arg0_1, arg0_1);  arg0_1 = None
+    mul = torch.ops.aten.mul.Tensor(add, add)
+    add_1 = torch.ops.aten.add.Tensor(mul, mul);  mul = None
+    return (add, add_1)""",
+        )
+
+    def test_warning(self):
+        class M(torch.nn.Module):
+            def forward(self, x):
+                warnings.warn("moo")
+                res = x + x
+                warnings.warn(f"{res}")
+                return res
+
+        gm = export(M(), (torch.randn(3, 3),)).graph_module
+        self.assertExpectedInline(
+            gm.code.strip(),
+            """\
+def forward(self, arg0_1):
+    add = torch.ops.aten.add.Tensor(arg0_1, arg0_1);  arg0_1 = None
+    return (add,)""",
+        )
 
     def test_constant_fqn(self):
         class Nested(torch.nn.Module):
