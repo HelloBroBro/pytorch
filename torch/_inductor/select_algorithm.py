@@ -866,15 +866,6 @@ class ErrorFromChoice(RuntimeError):
 
 
 class AlgorithmSelectorCache(PersistentCache):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # the autotuning will get occur in the scheduler, so there is
-        # no guarantee that the first lowering for a given key will also be the
-        # first to benchmark it. share a single precompilation function for all lowerings
-        # of a particular key
-        self.precompile_cache: Dict[str, Callable[[], None]] = {}
-
     def __call__(
         self,
         name,
@@ -911,46 +902,43 @@ class AlgorithmSelectorCache(PersistentCache):
         def make_benchmark_fn():
             return self.make_benchmark_fn(choices, input_nodes, layout, input_gen_fns)
 
-        inputs_key = repr([self.key_of(x) for x in input_nodes])
+        def precompile(choices) -> Callable[[], None]:
+            def no_op(*args, **kwargs):
+                return
 
-        def precompile(choices):
             if (
                 precompilation_timeout_seconds is None
                 or precompilation_timeout_seconds <= 0
             ):
-                return
+                return no_op
             num_workers = min(
                 config.compile_threads,
                 torch.get_num_threads(),
                 len(choices),
             )
             if num_workers <= 0:
-                return
-            log.info(
-                "Multithreaded precompilation for %d choices using %d worker threads",
-                len(choices),
-                num_workers,
-            )
+                return no_op
+
+            # TODO - debug issue
+            if torch.version.hip:
+                return no_op
 
             # check local and global cache before precompiling
             timings = self.lookup(
                 choices,
                 name,
-                inputs_key,
+                repr([self.key_of(x) for x in input_nodes]),
                 benchmark=None,
             )
-
-            def no_op(*args, **kwargs):
-                return
 
             if timings:
                 return no_op
 
-            precompile_key = (
-                f"{name}: {inputs_key} : {torch.get_float32_matmul_precision()}"
+            log.info(
+                "Multithreaded precompilation for %d choices using %d worker threads",
+                len(choices),
+                num_workers,
             )
-            if precompile_func := self.precompile_cache.get(precompile_key):
-                return precompile_func
 
             executor = ThreadPoolExecutor(max_workers=num_workers)
             futures = executor.map(
@@ -959,9 +947,7 @@ class AlgorithmSelectorCache(PersistentCache):
                 timeout=precompilation_timeout_seconds,
             )
 
-            @functools.lru_cache(None)
             def wait_on_futures():
-                counters["inductor"]["select_algorithm_precompile"] += 1
                 try:
                     iterator = iter(futures)
                     while True:
@@ -977,10 +963,7 @@ class AlgorithmSelectorCache(PersistentCache):
                     )
                 except StopIteration:
                     pass
-
                 executor.shutdown(wait=True)
-
-            self.precompile_cache[precompile_key] = wait_on_futures
 
             return wait_on_futures
 
@@ -1002,7 +985,7 @@ class AlgorithmSelectorCache(PersistentCache):
             timings = self.lookup(
                 choices,
                 name,
-                inputs_key,
+                repr([self.key_of(x) for x in input_nodes]),
                 autotune,
             )
             autotune_elapse = time.time() - autotune_start_ts
