@@ -6,6 +6,7 @@ from enum import auto, Enum
 from typing import Any, cast, List, Optional, Tuple
 
 import torch
+import torch._dynamo.compiled_autograd as ca
 import torch.distributed as dist
 import torch.nn as nn
 from torch.distributed._composable.contract import _get_registry
@@ -33,9 +34,7 @@ class FSDPMeshInfo(DataParallelMeshInfo):
         if self.shard_mesh_dim is None:
             raise AssertionError("Expects non-None shard_mesh_dim")
         self.shard_mesh_size: int = self.mesh.size(self.shard_mesh_dim)
-        self.shard_process_group = cast(
-            dist.ProcessGroup, self.mesh.get_group(self.shard_mesh_dim)
-        )
+        self.shard_process_group = self.mesh.get_group(self.shard_mesh_dim)
         self.shard_mesh_rank: int = self.shard_process_group.rank()
 
 
@@ -46,9 +45,7 @@ class DDPMeshInfo(DataParallelMeshInfo):
         if self.replicate_mesh_dim is None:
             raise AssertionError("Expects non-None replicate_mesh_dim")
         self.replicate_mesh_size: int = self.mesh.size(self.replicate_mesh_dim)
-        self.replicate_process_group = cast(
-            dist.ProcessGroup, self.mesh.get_group(self.replicate_mesh_dim)
-        )
+        self.replicate_process_group = self.mesh.get_group(self.replicate_mesh_dim)
         self.replicate_mesh_rank: int = self.replicate_process_group.rank()
 
 
@@ -122,7 +119,7 @@ def _from_local_no_grad(
     it avoids some CPU overhead by avoiding default args and not being differentiable.
     """
 
-    if not torch._dynamo.compiled_autograd.compiled_autograd_enabled:
+    if not ca.compiled_autograd_enabled:
         spec = DTensorSpec(
             device_mesh,
             placements,
