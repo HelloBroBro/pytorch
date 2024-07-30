@@ -2994,6 +2994,15 @@ class GraphModule(torch.nn.Module):
     def test_map_enumerate(a, b):
         return list(enumerate(map(lambda x: x + 1, [a, b]), start=1)), a + 1
 
+    @make_test
+    def test_map_infinite(a, b):
+        return list(map(lambda x, y: x + y, [a, b], itertools.count(3)))
+
+    @make_test
+    def test_map_unpack_vars(a, b):
+        x, y = map(lambda x: x + 1, [a, b])
+        return x + y
+
     def test_enumerate_custom(self):
         class MyClass:
             def __iter__(self):
@@ -3524,6 +3533,24 @@ class DefaultsTests(torch._dynamo.test_case.TestCase):
 
         with self.assertRaisesRegex(ValueError, "zip()"):
             opt_fn(x, ys, zs[:1])
+
+    def test_fn_with_attr(self):
+        def fn(x):
+            if fn.pred:
+                return torch.relu(x * 2)
+            else:
+                return torch.abs(x + 3)
+
+        t = torch.ones(3)
+        counter = torch._dynamo.testing.CompileCounter()
+        fn.pred = True
+        opt_fn_0 = torch.compile(fullgraph=True, backend=counter)(fn)
+        self.assertEqual(opt_fn_0(t), fn(t))
+        self.assertEqual(counter.frame_count, 1)
+        fn.pred = False
+        opt_fn_1 = torch.compile(fullgraph=True, backend=counter)(fn)
+        self.assertEqual(opt_fn_1(t), fn(t))
+        self.assertEqual(counter.frame_count, 2)
 
 
 instantiate_parametrized_tests(FunctionTests)
