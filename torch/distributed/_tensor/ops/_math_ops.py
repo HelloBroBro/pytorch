@@ -320,6 +320,9 @@ LINEAR_REDUCTION_OP_MAP = {
     aten.min.default: "min",
     aten.min.dim: "min",
     aten.min.out: "min",
+    aten.any.default: "sum",
+    aten.any.dim: "sum",
+    aten.any.out: "sum",
 }
 
 
@@ -427,6 +430,7 @@ def foreach_norm_strategy(mesh: DeviceMesh, op_schema: OpSchema) -> TupleStrateg
         aten.diagonal.default,
         aten.tril.default,
         aten.triu.default,
+        aten._linalg_eigh.default,
     ],
     schema_info=RuntimeSchemaInfo(1),
 )
