@@ -100,6 +100,7 @@ class TestFullyShardCompileCompute(FSDPTest):
             self.assertTrue(trace_rules_check_count > 0)
 
 
+@skipIfRocm
 @unittest.skipIf(not HAS_GPU, "Inductor+gpu needs triton and recent GPU arch")
 class TestFullyShardCompile(FSDPTest):
     fake_pg = not at_least_x_gpu(2)
