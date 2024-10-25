@@ -933,10 +933,6 @@ This class does not support ``__members__`` property.)");
       py::arg("tensor"),
       py::arg("work"));
 
-  module.def("_get_work_registry_size", []() {
-    return ::c10d::get_work_registry_size();
-  });
-
   // Remove a group from the native registry
   module.def(
       "_unregister_process_group",
@@ -2776,6 +2772,10 @@ options :class:`~torch.distributed.ProcessGroupNCCL.Options`).
           .def(
               "abort",
               &::c10d::ProcessGroupNCCL::abort,
+              py::call_guard<py::gil_scoped_release>())
+          .def(
+              "_is_initialized",
+              &::c10d::ProcessGroupNCCL::isInitialized,
               py::call_guard<py::gil_scoped_release>());
 
   module.def(
